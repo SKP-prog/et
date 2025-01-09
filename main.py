@@ -1,16 +1,24 @@
 import math
+
 import requests
-API_KEY = ""
+import pandas as pd
+from tqdm import tqdm
+
 DOC_ID = "nADf8mVx-6"
 URI = {
     "table": "https://coda.io/apis/v1/docs/{docId}/tables",
     "row": "https://coda.io/apis/v1/docs/{docId}/tables/{table}/rows",
     "columns": "https://coda.io/apis/v1/docs/{docId}/tables/{table}/columns"
 }
-HEADER = {'Authorization': f'Bearer {API_KEY}'}
+HEADER = {'Authorization': 'Bearer {api_key}'}
 
 def main():
-    tns = get_all_table_names()
+    set_api_key("./API_KEY.txt")
+    # tns = get_all_table_names()  # Get all table names in doc
+
+    # Get Table Data
+    df = get_td("Historical Transactions")
+
 
 def get_all_table_names() -> list:
     """
@@ -20,14 +28,54 @@ def get_all_table_names() -> list:
     res = requests.get(URI["table"].format(docId=DOC_ID), headers=HEADER)
     assert res.status_code == 200
 
-    return res.json()
+    return [x['name'] for x in res.json()['items'] if x['tableType'] != 'view']
 
-def get_td():
+def get_td(tn: str) -> pd.DataFrame:
     """
-    Get Table Details
-    :return: dictionary of table info
+    Get Table Data using Table Name. Get all rows
+    :param tn: String value of table name
+    :return: DataFrame
+    """
+    det = get_t_details(tn)
+
+    df_data = []
+    total_pages, page_token = math.ceil(det['total'] / 200), None
+    for _ in tqdm(range(0, total_pages), total=total_pages, desc=f"Extracting Table ({tn})"):
+        param = {
+            "useColumnNames": "true"
+        }
+        if page_token is not None:
+            param['pageToken'] = page_token
+
+        rsp = requests.get(URI['row'].format(docId=DOC_ID, table=tn), headers=HEADER, params=param)
+        assert rsp.status_code == 200
+
+        data = rsp.json()
+        df_data += [x['values'] for x in data['items']]
+        page_token = data.get('nextPageToken', None)
+
+    return pd.DataFrame(df_data)
+
+def get_t_details(tn: str) -> dict:
+    """
+    Get Table Details like rowCount / id / etc.
+    :param tn: String value of table name
+    :return: dictionary of table details
+    """
+    rsp = requests.get(URI["table"].format(docId=DOC_ID) + f"/{tn}", headers=HEADER)
+    assert rsp.status_code == 200
+
+    data = rsp.json()
+    return {"total": data['rowCount'], "id": data['id']}
+
+def set_api_key(path: str) -> None:
     """
 
+    :param path: Path to API KEY text file. file should consist of the key only
+    :return: nothing. It sets the HEADER global object
+    """
+    with open(path, "r") as rf:
+        HEADER['Authorization'] = HEADER['Authorization'].format(api_key=rf.read().strip())
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
