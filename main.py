@@ -4,6 +4,7 @@ import requests
 import pandas as pd
 from tqdm import tqdm
 from datetime import datetime
+from db_connection import DB
 
 DOC_ID = "nADf8mVx-6"
 URI = {
@@ -28,9 +29,24 @@ def main():
     del df['Display']
     del df['UUID']
 
-    print(df)
-    print(df.dtypes)
     df.to_csv(f"Trans-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv", index=False)
+
+    # Update Database using the extracted data
+    update_db(df)
+
+
+def update_db(df: pd.DataFrame):
+    """
+    Updates Mongo Db with latest data
+    :param df: Dataframe to use to update mongo database
+    :return:
+    """
+    db = DB(host="localhost", port=27017, dbname="ExpenseTracker")
+
+    db.add_rows(df.to_dict("records"), "Transaction")
+
+    df = db.show_table("Transaction")
+    print(df)
 
 
 def get_all_table_names() -> list:
