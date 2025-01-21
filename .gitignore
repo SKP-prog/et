@@ -1,3 +1,5 @@
 .idea
 API_KEY.txt
 *.csv
+*.json
+.env
