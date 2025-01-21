@@ -35,6 +35,8 @@ class Wrapper:
             )
             df = pd.DataFrame(v)
             cur_date = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+            # TODO: before update google sheets, need to only update with the latest data
+            #  we can overwrite everything first, but for efficiency, should only append the latest
             gs.update_sheet(df, export_to=f"./backup/{k}_backup-{cur_date}.csv")
             # df.to_csv(f"{k}.csv", index=False)
 
