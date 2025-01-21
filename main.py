@@ -1,6 +1,9 @@
 import pandas as pd
 from utils.db_connection import DB
 from utils.coda import Coda
+from utils.sheets import GSheet
+import datetime
+from tqdm import tqdm
 
 
 class Wrapper:
@@ -23,9 +26,17 @@ class Wrapper:
         data_list = self._export_transactions()
 
         # data list to csv
-        for k, v in data_list.items():
+        for k, v in tqdm(data_list.items(), total=len(data_list), desc="Uploading to Google Sheets"):
+            # initialize Google Worksheets
+            gs = GSheet(
+                service_acc_path="./keys/GOOGLE_SERVICE_ACCOUNT.json",
+                doc_id="1o1pU8GcUO9aJTE9fQ7-grJiUkzCEUmZiVqyTQy6PhU0",
+                ws_name=k
+            )
             df = pd.DataFrame(v)
-            df.to_csv(f"{k}.csv", index=False)
+            cur_date = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+            gs.update_sheet(df, export_to=f"./backup/{k}_backup-{cur_date}.csv")
+            # df.to_csv(f"{k}.csv", index=False)
 
     def _update_transactions(self) -> None:
         """
