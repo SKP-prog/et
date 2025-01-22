@@ -34,13 +34,14 @@ class GSheet:
         df = pd.DataFrame(self.ws.get_all_records())
         return df
 
-    def update_sheet(self, df, export_to=None, datetime_type="datetime64[ns, UTC+08:00]"):
+    def update_sheet(self, df, export_to=None, datetime_type="datetime64[ns, UTC+08:00]", is_append=False):
         """
         Copy dataframe and replace google sheet with dataframe.
         System will Back up the records in the Google sheets before replacing them
         :param df: Dataframe to overwrite google sheet with
         :param export_to: path to export the backup to
         :param datetime_type: specify the str that is used to identify datetime
+        :param is_append: determines if the action is to append or to overwrite
         :return: Path to back up
         """
         if export_to is None:
@@ -56,7 +57,11 @@ class GSheet:
             df[col] = df[col].astype(str)
 
         # Overwrite Google sheets
-        self.ws.clear()
-        self.ws.update([df.columns.values.tolist()] + df.values.tolist())
+        if is_append:
+            self.ws.append_rows(df.values.tolist(), table_range="A1")
+        else:
+            self.ws.clear()
+            self.ws.update([df.columns.values.tolist()] + df.values.tolist())
 
         return export_to
+

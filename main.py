@@ -32,6 +32,7 @@ class Wrapper:
         data_list = self._export_transactions()
 
         # data list to csv
+        num_rows_added = {}
         for k, v in tqdm(data_list.items(), total=len(data_list), desc="Uploading to Google Sheets"):
             # initialize Google Worksheets
             gs = GSheet(
@@ -43,11 +44,25 @@ class Wrapper:
             cur_date = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
 
             # Compare Google sheets db and local dataframe, import only the diff
-            sheet_df = gs.get_in_df()
+            df_sheet = gs.get_in_df()
+            if len(df_sheet.columns) == 0:
+                gs.update_sheet(df, export_to=f"./backup/{k}_backup-{cur_date}.csv")
+                num_rows_added[k] = df.shape[0]
+                continue
 
-            # TODO: before update google sheets, need to only update with the latest data
-            #  we can overwrite everything first, but for efficiency, should only append the latest
-            gs.update_sheet(df, export_to=f"./backup/{k}_backup-{cur_date}.csv")
+            # Find the delta, those in df but not in df_sheet
+            df_new = pd.merge(df_sheet, df, how="outer", on="id", indicator=True)
+            df_new = df_new.loc[df_new['_merge'] == "right_only"]
+            df_new.rename(columns={
+                x + "_y": x for x in list(df.columns) if x != "id"
+            }, inplace=True)
+            df_new = df_new[df.columns]
+            num_rows_added[k] = df_new.shape[0]
+
+            gs.update_sheet(df_new, export_to=f"./backup/{k}_backup-{cur_date}.csv", is_append=True)
+
+        for k, v in num_rows_added.items():
+            print(f"Added {v} rows for {k}")
 
     def _update_transactions(self) -> None:
         """
@@ -189,7 +204,8 @@ class Wrapper:
         }, inplace=True)
 
         return (
-            df_trans_cat[["id", "label", "notes", "affect cash flow", "trans_type_id", "cat_type_id"]].to_dict("records"),
+            df_trans_cat[["id", "label", "notes", "affect cash flow",
+                          "trans_type_id", "cat_type_id"]].to_dict("records"),
             list_cat_type, list_trans_type
         )
 
