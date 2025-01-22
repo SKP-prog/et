@@ -40,7 +40,10 @@ class Coda:
             assert rsp.status_code == 200, rsp.text
 
             data = rsp.json()
-            df_data += [x['values'] for x in data['items']]
+            for row in data['items']:
+                d = row["values"]
+                d["id"] = row["id"]
+                df_data.append(d)
             page_token = data.get('nextPageToken', None)
         df = pd.DataFrame(df_data)
 

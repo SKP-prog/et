@@ -5,6 +5,12 @@ from utils.sheets import GSheet
 import datetime
 from tqdm import tqdm
 
+"""
+Goal of this script is to get data from CODA and throw into Google sheets.
+we can use google sheets as a prototype database to store data. 
+the Django back end will need to perform the checks for data integrity.
+"""
+
 
 class Wrapper:
     def __init__(self):
@@ -35,10 +41,13 @@ class Wrapper:
             )
             df = pd.DataFrame(v)
             cur_date = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+
+            # Compare Google sheets db and local dataframe, import only the diff
+            sheet_df = gs.get_in_df()
+
             # TODO: before update google sheets, need to only update with the latest data
             #  we can overwrite everything first, but for efficiency, should only append the latest
             gs.update_sheet(df, export_to=f"./backup/{k}_backup-{cur_date}.csv")
-            # df.to_csv(f"{k}.csv", index=False)
 
     def _update_transactions(self) -> None:
         """
@@ -70,42 +79,34 @@ class Wrapper:
         :return: dictionary of all the list and the transactions.
         """
         # Get Data Lists E.g. Accounts / Statements / Categories
-        df = self.c.exp_table("Account")
-        list_acc, list_acc_type = self._process_acc(df)  # Split Type into list
-        df = self.c.exp_table("Categories")
-        list_trans_cat, list_cat_cat, list_trans_type = self._process_cats(df)
+        list_acc, list_acc_type = self._process_acc()  # Get Account and Account Type
+        list_trans_cat, list_cat_type, list_trans_type = self._process_cats()
 
         # Get Transactions
         df = self.c.exp_table("Historical Transactions" if is_historical else "Current Transactions")
 
-        # Convert Currency to List Type
-        list_currency = [{"id": i + 1, "label": x} for i, x in enumerate(sorted(df['Currency'].unique()))]
-
         # Process dtypes
         df['Note'] = df["Note"].str.strip()
-        df['Date'] = pd.to_datetime(df['Date'])
         df['Value'] = df['Value'].str.replace(r"[\$,]", "", regex=True).astype(float)
-        df['Amount (SGD)'] = df['Amount (SGD)'].str.replace(r"[\$,]", "", regex=True).astype(float)
         # Set Foreign Keys
-        df['id'] = df.index + 1  # generate unique index
         df["trans_cat_id"] = df["Category"].apply(lambda x: [d for d in list_trans_cat if d["label"] == x][0]["id"])
         df["acc_id"] = df["Account"].apply(lambda x: [d for d in list_acc if d["label"] == x][0]["id"])
-        df['curr_id'] = df["Currency"].apply(lambda x: [d for d in list_currency if d["label"] == x][0]['id'])
         df.rename(columns={
             "Note": "note",
             "Date": "trans_date",
             "Value": "raw_value",
             "Rate": "conv_rate",
+            "Currency": "currency"
         }, inplace=True)
-        out_cols = ["id", "note", "trans_date", "raw_value", "conv_rate", "trans_cat_id", "acc_id", "curr_id"]
+        out_cols = ["id", "note", "trans_date", "raw_value", "currency", "conv_rate", "trans_cat_id", "acc_id"]
+
         return {
-            "trans": df[out_cols].to_dict("records"),
-            "acc": list_acc,
-            "acc_type": list_acc_type,
-            "curr": list_currency,
-            "cat_cat": list_cat_cat,
-            "trans_cat": list_trans_cat,
-            "trans_type": list_trans_type
+            "transactions": df[out_cols].to_dict("records"),
+            "account": list_acc,
+            "account_type": list_acc_type,
+            "category_type": list_cat_type,
+            "transaction_category": list_trans_cat,
+            "transaction_type": list_trans_type
         }
 
     def _update_statements(self) -> None:
@@ -133,58 +134,64 @@ class Wrapper:
 
         return df[cols]
 
-    @staticmethod
-    def _process_acc(df) -> tuple:
+    def _process_acc(self) -> tuple:
         """
+        Extract Dataframe from Coda.
         Convert Data frames into multiple report list. Account has Account Type and Name. We want
         Account Type to be its own set of data table list.
-        :param df:
         :return: two list. 1 contains accounts and the other returns account Types
         """
-        # Get all Labels for Accounts and convert to datatable
-        acc_type_list = []
-        for i, _type in enumerate(sorted(df['Type'].unique())):
-            acc_type_list.append({
-                "id": i + 1,
-                "label": _type
-            })
+        acc_df = self.c.exp_table("Account")
+        acc_type_df = self.c.exp_table("AccountType")
 
         # Set ID of acc_type_list to dataframe
-        df['acc_type_id'] = df['Type'].apply(lambda x: [d for d in acc_type_list if d["label"] == x][0]["id"])
-        df.rename(columns={
-            "Name": "label"
-        }, inplace=True)
-        df["id"] = df.index + 1
+        acc_type_df.rename(columns={"Type": "label"}, inplace=True)
+        list_acc_type = acc_type_df.to_dict("records")
+        acc_df["acc_type_id"] = acc_df["Type"].apply(lambda x: [d for d in list_acc_type if d["label"] == x][0]["id"])
 
-        return df[["id", "label", "acc_type_id"]].to_dict("records"), acc_type_list
+        # rename acc df
+        acc_df.rename(columns={"Name": "label"}, inplace=True)
 
-    @staticmethod
-    def _process_cats(df) -> tuple:
+        return acc_df[["id", "label", "acc_type_id"]].to_dict("records"), list_acc_type
+
+    def _process_cats(self) -> tuple:
         """
-        Split Categories into multiple lists.
-        :param df:
+        Get Category and all associated foreign tables for categories
+        Convert to dataframe and export as record list
         :return: 3 list
             1 - Transaction Categories
-            2 - Category Categories (Main Category of Transaction Categories)
+            2 - Category Type (Main Category of Transaction Categories)
             3 - transaction Types (E.g. Expense / Income)
         """
-        # Convert Category to category_category (The category of the transaction Category)
-        list_cat_cat = [{"id": i + 1, "label": x} for i, x in enumerate(sorted(df["Category"].unique()))]
-        # Convert Type to list (E.g. Expense/Income)
-        list_trans_type = [{"id": i + 1, "label": x} for i, x in enumerate(sorted(df['Type'].unique()))]
+        # Get data from CODA
+        df_trans_cat = self.c.exp_table("Categories")  # Used to connect Transactions to a category
+        df_trans_type = self.c.exp_table("TransactionType")
+        df_cat_type = self.c.exp_table("CategoryType")  # Used as a general category for trans_cat
 
-        # Set foreign key to transaction category
-        df['id'] = df.index + 1
-        df['type_id'] = df['Type'].apply(lambda x: [d for d in list_trans_type if d['label'] == x][0]['id'])
-        df['cat_id'] = df['Category'].apply(lambda x: [d for d in list_cat_cat if d['label'] == x][0]['id'])
-        df.rename(columns={
+        # Rename Category Type
+        df_cat_type.rename(columns={"Category": "label"}, inplace=True)
+        list_cat_type = df_cat_type.to_dict("records")
+        # Rename Transaction Type
+        df_trans_type.rename(columns={"Type": "label"}, inplace=True)
+        list_trans_type = df_trans_type.to_dict("records")
+
+        # Set two type list as foreign keys
+        df_trans_cat['trans_type_id'] = df_trans_cat["Type"].apply(
+            lambda x: [d for d in list_trans_type if d["label"] == x][0]["id"])
+        df_trans_cat['cat_type_id'] = df_trans_cat['Category'].apply(
+            lambda x: [d for d in list_cat_type if d["label"] == x][0]["id"])
+
+        # Raname Parent Dataframe
+        df_trans_cat.rename(columns={
             "Name": "label",
             "Affect Cash Flow": "affect cash flow",
             "Notes": "notes"
         }, inplace=True)
 
-        return (df[["id", "label", "notes", "affect cash flow", "type_id", "cat_id"]].to_dict("records"),
-                list_cat_cat, list_trans_type)
+        return (
+            df_trans_cat[["id", "label", "notes", "affect cash flow", "trans_type_id", "cat_type_id"]].to_dict("records"),
+            list_cat_type, list_trans_type
+        )
 
 
 if __name__ == '__main__':
