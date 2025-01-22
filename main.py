@@ -20,10 +20,10 @@ class Wrapper:
         self.c = Coda(api_key, "nADf8mVx-6")
         try:
             self.db = DB(host="localhost", port=27017, dbname="ExpenseTracker")
+        except TimeoutError as e:
             print()
             print(f"Failed to Connect to Database")
             print()
-        except TimeoutError as e:
             self.db = None
 
     def run(self):
